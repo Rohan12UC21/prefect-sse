@@ -13,5 +13,6 @@ if [ -z "$motherduck_token" ]; then
   echo "motherduck-mcp: set MOTHERDUCK_TOKEN in .env" >&2
   exit 1
 fi
-# --read-only would need a MotherDuck read-scaling token; a normal token must connect read/write.
-exec uvx mcp-server-motherduck --db-path md:neos
+# The server defaults to read-only, which with MotherDuck needs a read-scaling token. A normal
+# token has to connect with --read-write. Claude Code can then write; it is your own database.
+exec uvx mcp-server-motherduck --db-path md:neos --read-write

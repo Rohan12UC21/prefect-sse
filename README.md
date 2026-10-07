@@ -136,15 +136,25 @@ Trigger a run without waiting:
 uv run prefect deployment run 'neo-flow/daily' --param day=2026-10-02
 ```
 
-### Failure email
+### Failure ping to Discord
 
-An automation named `neo-flow failed -> email` sends a mail (via the `failure-email` block) when
-a run of `neo-flow/daily` enters Failed or Crashed. It was created with the Python client; the
-Automations page in Prefect Cloud shows and edits it. Test it with a bad input:
+An automation named `neo-flow failed -> discord` fires when a run of `neo-flow/daily` enters
+Failed or Crashed. Its action is **call webhook** against a `Webhook` block named
+`discord-failures` that holds a Discord webhook URL, with a JSON payload Discord renders as a
+message. Test it with a bad input:
 
 ```sh
 uv run prefect deployment run 'neo-flow/daily' --param day=not-a-date --watch
 ```
+
+Two things learned the hard way, so you don't repeat them:
+
+- The free tier can only *email* verified account members, and a GitHub login does not count
+  as verified. Hence Discord.
+- The "send notification" action in Prefect Cloud only accepts block types its own runner knows
+  (Slack, Teams, PagerDuty, Twilio, Opsgenie, Mattermost, SendGrid, Email). `DiscordWebhook` and
+  `CustomWebhookNotificationBlock` are rejected at send time with "No class found for dispatch
+  key". For anything else, use the "call webhook" action with a `Webhook` block instead.
 
 ## Step 3: access from Claude Code
 
@@ -182,7 +192,7 @@ defines the outcome and Prefect executes it.
 - [x] Step 2a: Prefect flow runs locally
 - [x] Step 2b: repo on GitHub, Actions workflow deploys on push, `neo-flow/daily` registered on the managed pool
 - [x] Step 2c: MotherDuck token synced into a Secret block by the workflow, first managed run wrote rows to `md:neos`
-- [x] Step 2d: failure automation emails you
+- [x] Step 2d: failure automation posts to Discord
 - [x] Step 3: MCP servers in `.mcp.json` (MotherDuck one needs `MOTHERDUCK_TOKEN` in `.env`)
 - [ ] Step 4: Dagster assets and check
 - [ ] Step 5: capstone

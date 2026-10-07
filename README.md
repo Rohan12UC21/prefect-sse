@@ -39,7 +39,8 @@ flows/neo_flow.py                 Prefect wrapper: three @tasks, one @flow
 prefect.yaml                      deployment: managed pool, schedule, repo to clone, db_path=md:neos
 .github/workflows/prefect-deploy.yml   runs `prefect deploy --all` on every push to main
 dagster_defs/                     (step 4, not yet written) Dagster assets around the same core functions
-.mcp.json                         (step 3, not yet written) MCP servers for Claude Code
+.mcp.json                         MCP servers for Claude Code: prefect, motherduck
+scripts/motherduck-mcp.sh         loads .env, then starts MotherDuck's MCP server read-only on md:neos
 ```
 
 The table, wherever it lives: `neos(date, neo_id, name, diameter_m, miss_km, velocity_kph, hazardous)`.
@@ -135,12 +136,33 @@ Trigger a run without waiting:
 uv run prefect deployment run 'neo-flow/daily' --param day=2026-10-02
 ```
 
-## Step 3: access from Claude Code (not yet done)
+### Failure email
 
-Two existing MCP servers, no tool code:
+An automation named `neo-flow failed -> email` sends a mail (via the `failure-email` block) when
+a run of `neo-flow/daily` enters Failed or Crashed. It was created with the Python client; the
+Automations page in Prefect Cloud shows and edits it. Test it with a bad input:
 
-- `prefect-mcp-server`, Prefect's official server, built on FastMCP, for "did last night's run pass?"
-- `mcp-server-motherduck`, MotherDuck's official server, for "what passed closest this week?"
+```sh
+uv run prefect deployment run 'neo-flow/daily' --param day=not-a-date --watch
+```
+
+## Step 3: access from Claude Code
+
+`.mcp.json` wires two existing MCP servers into Claude Code. No tool code in this repo:
+
+- `prefect`: Prefect's official server (`uvx --from prefect-mcp prefect-mcp-server`), built on
+  FastMCP. Reads your active Prefect profile, so `prefect cloud login` is all it needs. Fifteen
+  read-only tools: deployments, flow runs, logs, work pools, automations, events, docs search.
+- `motherduck`: MotherDuck's official server, started through `scripts/motherduck-mcp.sh`, which
+  loads `.env` first because Claude Code does not. Needs `MOTHERDUCK_TOKEN` in `.env`. Opened
+  read-only on `md:neos`.
+
+Restart Claude Code in this directory and approve the two project servers when prompted. Then:
+
+- "Did last night's neo-flow run pass? Show me the logs if not."
+- "Which asteroid passed closest to Earth this week, and how big was it?"
+
+To read the FastMCP side, the Prefect server's source is at github.com/PrefectHQ/prefect-mcp-server.
 
 ## Step 4: Dagster (not yet done)
 
@@ -159,7 +181,8 @@ defines the outcome and Prefect executes it.
 - [x] Step 2a: Prefect flow runs locally
 - [x] Step 2b: repo on GitHub, Actions workflow deploys on push, `neo-flow/daily` registered on the managed pool
 - [x] Step 2c: MotherDuck token synced into a Secret block by the workflow, first managed run wrote rows to `md:neos`
-- [ ] Step 3: MCP servers in `.mcp.json`
+- [x] Step 2d: failure automation emails you
+- [x] Step 3: MCP servers in `.mcp.json` (MotherDuck one needs `MOTHERDUCK_TOKEN` in `.env`)
 - [ ] Step 4: Dagster assets and check
 - [ ] Step 5: capstone
 

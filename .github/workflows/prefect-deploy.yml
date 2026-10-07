@@ -1,7 +1,7 @@
 # Registers the deployments in prefect.yaml with Prefect Cloud on every push to main.
 #
 # This does not run the flow. It tells Prefect Cloud "the deployment now points at this commit's
-# prefect.yaml". The flow itself still runs on your laptop's worker, which clones the repo.
+# prefect.yaml". The flow itself runs on Prefect's managed pool, in a container that clones the repo.
 #
 # Secrets: PREFECT_API_KEY (a Prefect Cloud API key), PREFECT_API_URL (the workspace URL that
 # `prefect config view` prints after `prefect cloud login`), MOTHERDUCK_API_KEY (a MotherDuck

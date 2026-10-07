@@ -76,6 +76,17 @@ CREATE TABLE IF NOT EXISTS neos (
 COLUMNS = ["date", "neo_id", "name", "diameter_m", "miss_km", "velocity_kph", "hazardous"]
 
 
+def connect(db_path: str, read_only: bool = False) -> duckdb.DuckDBPyConnection:
+    """Open a local file, or a MotherDuck database (md:<name>), creating the latter if needed."""
+    if not db_path.startswith("md:"):
+        return duckdb.connect(db_path, read_only=read_only)
+    name = db_path[3:]
+    con = duckdb.connect("md:")  # MotherDuck does not create a database on attach
+    con.execute(f'CREATE DATABASE IF NOT EXISTS "{name}"')
+    con.execute(f'USE "{name}"')
+    return con
+
+
 def write_rows(rows: list[Row], db_path: str = DEFAULT_DB_PATH) -> int:
     """Append rows to the `neos` table, creating the database and table on first use. Returns rows written.
 
@@ -83,7 +94,7 @@ def write_rows(rows: list[Row], db_path: str = DEFAULT_DB_PATH) -> int:
     from the environment). Deliberately a plain INSERT: running the same day twice produces duplicates. That is what
     the Dagster asset check is there to catch, and what partitions and result caching prevent.
     """
-    with duckdb.connect(db_path) as con:
+    with connect(db_path) as con:
         con.execute(CREATE_TABLE)
         if rows:
             con.executemany(
@@ -101,7 +112,7 @@ def main(argv: list[str]) -> None:
     written = write_rows(rows, db_path)
     print(f"{day}: wrote {written} rows to {db_path}")
 
-    with duckdb.connect(db_path, read_only=not db_path.startswith("md:")) as con:
+    with connect(db_path, read_only=True) as con:
         closest = con.execute(
             "SELECT name, round(miss_km) AS miss_km, hazardous FROM neos WHERE date = ? ORDER BY miss_km LIMIT 3",
             [day],

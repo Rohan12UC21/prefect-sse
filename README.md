@@ -35,7 +35,7 @@ can still write to a local `neos.duckdb` file for poking around.
 
 ```
 core/neos.py                      three plain functions, no framework imports
-flows/neo_flow.py                 Prefect wrapper: three @tasks, one @flow
+flows/neo_flow.py                 Prefect wrapper: @tasks, @materialize, a table artifact, one @flow
 prefect.yaml                      deployment: managed pool, schedule, repo to clone, db_path=md:neos
 .github/workflows/prefect-deploy.yml   runs `prefect deploy --all` on every push to main
 dagster_defs/definitions.py       Dagster wrapper: three partitioned @assets, one @asset_check
@@ -135,6 +135,18 @@ Trigger a run without waiting:
 ```sh
 uv run prefect deployment run 'neo-flow/daily' --param day=2026-10-02
 ```
+
+### What a run reports back
+
+Beyond logs, the flow tells Prefect Cloud two things about the outcome:
+
+- **An artifact.** The `report` task attaches the day's rows as a table to the run, closest
+  approach first (`create_table_artifact`, key `neos-daily`). Open any run and click Artifacts.
+- **An asset materialization.** `load` is decorated with `@materialize(NEOS_TABLE, by="duckdb")`
+  and `fetch` declares `asset_deps=[NEOWS_FEED]`, so the Assets page in Cloud shows the `neos`
+  table as an asset with lineage from the NASA feed, last-materialized time, and the metadata
+  the task adds (rows written, date). This is Prefect's own answer to Dagster's assets. It
+  tracks *that* and *when* an asset was produced; partitions and checks remain Dagster's.
 
 ### Failure ping to Discord
 

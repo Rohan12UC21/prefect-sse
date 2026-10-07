@@ -107,8 +107,10 @@ Secret(value=os.environ['NASA_API_KEY']).save('nasa-api-key', overwrite=True)
 Secret(value=os.environ['MOTHERDUCK_TOKEN']).save('motherduck-token', overwrite=True)"
 ```
 
-And in the GitHub repo, two Actions secrets: `PREFECT_API_KEY` (from Prefect Cloud, API keys)
-and `PREFECT_API_URL` (the URL `uv run prefect config view` prints after login).
+And in the GitHub repo, three Actions secrets: `PREFECT_API_KEY` (from Prefect Cloud, API keys),
+`PREFECT_API_URL` (the URL `uv run prefect config view` prints after login), and
+`MOTHERDUCK_API_KEY`. The workflow copies the MotherDuck key into the `motherduck-token` Secret
+block on every deploy, so you only need `MOTHERDUCK_TOKEN` in `.env` for local runs.
 
 ### Deploying
 
@@ -156,7 +158,7 @@ defines the outcome and Prefect executes it.
 - [x] Step 1: core functions, verified against the live feed
 - [x] Step 2a: Prefect flow runs locally
 - [x] Step 2b: repo on GitHub, Actions workflow deploys on push, `neo-flow/daily` registered on the managed pool
-- [ ] Step 2c: MotherDuck token in `.env` and as a Secret block, first managed run
+- [x] Step 2c: MotherDuck token synced into a Secret block by the workflow, first managed run wrote rows to `md:neos`
 - [ ] Step 3: MCP servers in `.mcp.json`
 - [ ] Step 4: Dagster assets and check
 - [ ] Step 5: capstone

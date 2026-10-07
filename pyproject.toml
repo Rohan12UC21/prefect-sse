@@ -1,0 +1,13 @@
+[project]
+name = "prefect-sse"
+version = "0.1.0"
+description = "Daily near-Earth asteroid pipeline, built three ways: Prefect, Dagster, and MCP access."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "httpx>=0.27",
+    "duckdb>=1.1",
+    "prefect>=3.8.8",
+]
+
+[tool.uv]
+package = false

@@ -1,0 +1,26 @@
+# Prefect deployment config. `prefect deploy --all` registers everything below in Prefect Cloud.
+#
+# The worker never uses this directory. At each run it clones the repo at `pull`, cd's into the
+# clone, and imports the entrypoint from there. That is why db_path below is absolute.
+
+name: prefect-sse
+prefect-version: 3.8.8
+
+pull:
+  - prefect.deployments.steps.git_clone:
+      repository: https://github.com/Rohan12UC21/prefect-sse.git
+      branch: main
+
+deployments:
+  - name: daily
+    description: Fetch today's near-Earth asteroid close approaches and append them to neos.duckdb.
+    entrypoint: flows/neo_flow.py:neo_flow
+    work_pool:
+      name: local
+    schedules:
+      - cron: "0 6 * * *"
+        timezone: America/New_York
+        active: true
+    parameters:
+      db_path: /Users/rohankapoor/prefect-sse/neos.duckdb
+    tags: [asteroids]

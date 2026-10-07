@@ -1,259 +1,77 @@
 # prefect-sse
 
-A deliberately plain data pipeline, built three ways, to learn the three layers Prefect now owns:
+Daily near-Earth asteroid pipeline, built three ways to compare the three layers Prefect now owns:
+**Prefect** executes it, **Dagster** declares it, **FastMCP** gives an AI agent access to it.
 
-| Layer | Tool | Role in this repo |
-|---|---|---|
-| Outcomes | Dagster | declares what should exist: assets, partitions, checks |
-| Execution | Prefect + Prefect Cloud | runs the work: schedules, retries, managed compute, run history |
-| Access | FastMCP (via existing MCP servers) | lets Claude Code ask questions about runs and data |
-
-**The job:** every morning, fetch the asteroids making their closest approach to Earth that day
-from NASA's Near Earth Object feed, flatten them to one row per asteroid, and append the rows to
-a `neos` table. One request in, a handful of rows out. The API is free and takes a date in the
-URL, which is what makes daily partitions and backfills meaningful later.
-
-**Where things run.** Prefect Cloud's free Hobby tier only executes flows on its own managed
-serverless pool, which has no persistent disk. So the scheduled flow writes to MotherDuck, a
-hosted DuckDB with a free tier, and nothing in the cloud ever touches your laptop. Local runs
-can still write to a local `neos.duckdb` file for poking around.
+Every morning the flow fetches the asteroids making their closest approach to Earth that day from
+[NASA's NeoWs feed](https://api.nasa.gov), flattens them to one row per asteroid, and appends the
+rows to a `neos` table in [MotherDuck](https://motherduck.com). It runs on Prefect Cloud's managed
+pool, is deployed from this repo by GitHub Actions, and pings Discord if it fails.
 
 ```
-            ┌────────────────┐  push   ┌────────────────┐  prefect deploy  ┌────────────────┐
-  you  ───▶ │  GitHub repo   │ ──────▶ │ GitHub Actions │ ───────────────▶ │  Prefect Cloud │
-            └────────────────┘         └────────────────┘                  │  schedule 06:00│
-                    ▲ clone                                                └───────┬────────┘
-                    │                                                              │ starts a container
-            ┌───────┴────────┐  GET /feed   ┌─────────────┐    INSERT   ┌──────────▼─────────┐
-            │  managed run   │ ───────────▶ │  NASA NeoWs │             │     MotherDuck     │
-            │ fetch→transform│ ◀─────────── │             │   ◀──────── │   db neos, table   │
-            │     →load      │              └─────────────┘             │        neos        │
-            └────────────────┘                                          └────────────────────┘
+  push          GitHub Actions           Prefect Cloud (free tier)
+ ──────▶ repo ──────────────────▶ deployment neo-flow/daily, cron 06:00
+            ▲ clone                          │ starts a container
+            │                                ▼
+         managed run: fetch ──▶ transform ──▶ load ──▶ MotherDuck  md:neos
+                        │                                    ▲
+                   NASA NeoWs API              Dagster assets (local) and
+                                               Claude Code via MCP read/write here
+```
+
+The step-by-step walkthrough, concepts, and what was learned live in the
+[Asteroid Pipeline Field Guide](https://claude.ai/code/artifact/7bf37196-0aa2-4499-b63c-01cd42d9c2c4).
+
+## Quick start
+
+Requires [uv](https://docs.astral.sh/uv/). Python 3.12 is pinned (Prefect and Dagster do not
+support 3.14 yet); uv downloads it.
+
+```sh
+uv sync
+cp .env.example .env            # fill in NASA_API_KEY and MOTHERDUCK_TOKEN
+uv run --env-file .env python -m core.neos 2026-09-30            # core only, local DuckDB file
+uv run --env-file .env python -m flows.neo_flow 2026-09-30       # Prefect flow, local
+uv run --env-file .env dagster dev                               # Dagster UI on :3000
 ```
 
 ## Layout
 
-```
-core/neos.py                      three plain functions, no framework imports
-flows/neo_flow.py                 Prefect wrapper: @tasks, @materialize, a table artifact, one @flow
-prefect.yaml                      deployment: managed pool, schedule, repo to clone, db_path=md:neos
-.github/workflows/prefect-deploy.yml   runs `prefect deploy --all` on every push to main
-dagster_defs/definitions.py       Dagster wrapper: three partitioned @assets, one @asset_check
-.mcp.json                         MCP servers for Claude Code: prefect, motherduck
-scripts/motherduck-mcp.sh         loads .env, then starts MotherDuck's MCP server on md:neos
-```
+| Path | What it is |
+| --- | --- |
+| `core/neos.py` | `fetch_neos`, `to_rows`, `write_rows`. Plain Python, no framework imports. |
+| `flows/neo_flow.py` | Prefect flow: three tasks with retries, Secret blocks, a table artifact, an asset materialization. |
+| `prefect.yaml` | Deployment: managed work pool, cron schedule, repo to clone, `db_path: md:neos`. |
+| `.github/workflows/prefect-deploy.yml` | On push to `main`: sync the MotherDuck token into a Secret block, `prefect deploy --all`. |
+| `dagster_defs/definitions.py` | Dagster: assets `raw_neos -> neos -> neos_table` with daily partitions, check `no_duplicate_rows`. |
+| `.mcp.json`, `scripts/motherduck-mcp.sh` | MCP servers for Claude Code: Prefect (official, FastMCP) and MotherDuck (official). |
 
-The table, wherever it lives: `neos(date, neo_id, name, diameter_m, miss_km, velocity_kph, hazardous)`.
+Table schema: `neos(date, neo_id, name, diameter_m, miss_km, velocity_kph, hazardous)`.
 
-Everything that does real work is in `core/neos.py`. The other files are framework wiring, so
-anything that differs between the Prefect and Dagster versions is that framework's opinion.
+## Configuration
 
-## Setup
+| Where | Name | Purpose |
+| --- | --- | --- |
+| `.env` | `NASA_API_KEY` | free key from api.nasa.gov; `DEMO_KEY` works but is capped at 50 requests/day |
+| `.env` | `MOTHERDUCK_TOKEN` | MotherDuck access token, for local runs and the MCP server |
+| `.env` | `NEOS_DB_PATH` | where Dagster writes: `md:neos` or a local file |
+| `.env` | `DAGSTER_HOME` | keeps Dagster run history across restarts |
+| Prefect Cloud blocks | `nasa-api-key`, `motherduck-token` (Secret), `discord-failures` (Webhook) | what the managed run and the failure automation read |
+| GitHub Actions secrets | `PREFECT_API_KEY`, `PREFECT_API_URL`, `MOTHERDUCK_API_KEY` | what the deploy workflow needs |
 
-Requires [uv](https://docs.astral.sh/uv/). Python 3.12 is pinned because Prefect and Dagster
-do not support 3.14 yet; uv downloads it.
-
-```sh
-uv sync
-cp .env.example .env
-```
-
-Fill in `.env`:
-
-- `NASA_API_KEY`: free, instant, from https://api.nasa.gov. `DEMO_KEY` works but is capped at
-  50 requests a day, which a month-long backfill will exceed.
-- `MOTHERDUCK_TOKEN`: from https://app.motherduck.com, Settings, Access Tokens. Free tier is 10 GB.
-
-## Step 1: run the core by hand
+## Operating it
 
 ```sh
-uv run --env-file .env python -m core.neos 2026-09-30            # -> ./neos.duckdb
-uv run --env-file .env python -m core.neos 2026-09-30 md:neos    # -> MotherDuck
-```
-
-Prints the rows written and the three closest approaches. Running the same day twice appends
-duplicate rows on purpose; preventing that is the job of the orchestrators in later steps.
-
-## Step 2: Prefect
-
-### Run the flow locally
-
-```sh
-uv run --env-file .env python -m flows.neo_flow 2026-10-01
-```
-
-Prefect starts a temporary local API server, runs `fetch -> transform -> load`, and stops it.
-`fetch` retries three times with backoff. Set `NEOS_DB_PATH=md:neos` to write to MotherDuck
-instead of the local file. A `database is locked` line from the temporary server's telemetry
-is harmless.
-
-### One-time Prefect Cloud setup
-
-From your own terminal, since it opens a browser:
-
-```sh
-uv run prefect cloud login
-```
-
-Then:
-
-```sh
-# the serverless pool the Hobby tier provides (500 minutes a month)
-uv run prefect work-pool create managed --type prefect:managed
-
-# secrets the managed run needs, so it never sees .env
-uv run --env-file .env python -c "
-from prefect.blocks.system import Secret; import os
-Secret(value=os.environ['NASA_API_KEY']).save('nasa-api-key', overwrite=True)
-Secret(value=os.environ['MOTHERDUCK_TOKEN']).save('motherduck-token', overwrite=True)"
-```
-
-And in the GitHub repo, three Actions secrets: `PREFECT_API_KEY` (from Prefect Cloud, API keys),
-`PREFECT_API_URL` (the URL `uv run prefect config view` prints after login), and
-`MOTHERDUCK_API_KEY`. The workflow copies the MotherDuck key into the `motherduck-token` Secret
-block on every deploy, so you only need `MOTHERDUCK_TOKEN` in `.env` for local runs.
-
-### Deploying
-
-Push to `main`. The workflow runs `prefect deploy --all`, which registers `neo-flow/daily`
-against `prefect.yaml`. To do it by hand instead: `uv run prefect deploy --all`.
-
-### What happens on each scheduled run
-
-06:00 America/New_York, set in `prefect.yaml`:
-
-1. Prefect Cloud creates a flow run from the schedule.
-2. The managed pool starts a fresh container for it.
-3. The container clones this repo at `main` (the `pull` step), installs `pip_packages`, and
-   imports `flows/neo_flow.py:neo_flow`.
-4. `fetch` loads the NASA key from the `nasa-api-key` Secret block and calls the feed.
-5. `load` loads the MotherDuck token from the `motherduck-token` block and inserts into `md:neos`.
-6. The container reports state and logs to Prefect Cloud and is discarded.
-
-Trigger a run without waiting:
-
-```sh
-uv run prefect deployment run 'neo-flow/daily' --param day=2026-10-02
-```
-
-### What a run reports back
-
-Beyond logs, the flow tells Prefect Cloud two things about the outcome:
-
-- **An artifact.** The `report` task attaches the day's rows as a table to the run, closest
-  approach first (`create_table_artifact`, key `neos-daily`). Open any run and click Artifacts.
-- **An asset materialization.** `load` is decorated with `@materialize(NEOS_TABLE, by="duckdb")`
-  and `fetch` declares `asset_deps=[NEOWS_FEED]`, so the Assets page in Cloud shows the `neos`
-  table as an asset with lineage from the NASA feed, last-materialized time, and the metadata
-  the task adds (rows written, date). This is Prefect's own answer to Dagster's assets. It
-  tracks *that* and *when* an asset was produced; partitions and checks remain Dagster's.
-
-### Failure ping to Discord
-
-An automation named `neo-flow failed -> discord` fires when a run of `neo-flow/daily` enters
-Failed or Crashed. Its action is **call webhook** against a `Webhook` block named
-`discord-failures` that holds a Discord webhook URL, with a JSON payload Discord renders as a
-message. Test it with a bad input:
-
-```sh
-uv run prefect deployment run 'neo-flow/daily' --param day=not-a-date --watch
-```
-
-Two things learned the hard way, so you don't repeat them:
-
-- The free tier can only *email* verified account members, and a GitHub login does not count
-  as verified. Hence Discord.
-- The "send notification" action in Prefect Cloud only accepts block types its own runner knows
-  (Slack, Teams, PagerDuty, Twilio, Opsgenie, Mattermost, SendGrid, Email). `DiscordWebhook` and
-  `CustomWebhookNotificationBlock` are rejected at send time with "No class found for dispatch
-  key". For anything else, use the "call webhook" action with a `Webhook` block instead.
-
-## Step 3: access from Claude Code
-
-`.mcp.json` wires two existing MCP servers into Claude Code. No tool code in this repo:
-
-- `prefect`: Prefect's official server (`uvx --from prefect-mcp prefect-mcp-server`), built on
-  FastMCP. Reads your active Prefect profile, so `prefect cloud login` is all it needs. Fifteen
-  read-only tools: deployments, flow runs, logs, work pools, automations, events, docs search.
-- `motherduck`: MotherDuck's official server, started through `scripts/motherduck-mcp.sh`, which
-  loads `.env` first because Claude Code does not. Needs `MOTHERDUCK_TOKEN` in `.env`. Its
-  `execute_query` tool runs SQL on `md:neos` (read/write: MotherDuck's read-only mode needs a
-  separate read-scaling token).
-
-Restart Claude Code in this directory and approve the two project servers when prompted. Then:
-
-- "Did last night's neo-flow run pass? Show me the logs if not."
-- "Which asteroid passed closest to Earth this week, and how big was it?"
-
-To read the FastMCP side, the Prefect server's source is at github.com/PrefectHQ/prefect-mcp-server.
-
-## Step 4: Dagster
-
-`dagster_defs/definitions.py` declares the same three steps as assets with daily partitions,
-plus one asset check, all calling the core functions. Where it writes comes from `NEOS_DB_PATH`
-in `.env` (`md:neos` to share the table with the Prefect deployment, or a local file to
-experiment).
-
-| Asset / check | What it is | Core call |
-|---|---|---|
-| `raw_neos` | the feed payload for one day (partition) | `fetch_neos` |
-| `neos` | one row per asteroid, depends on `raw_neos` | `to_rows` |
-| `neos_table` | the day's rows appended to the table, depends on `neos` | `write_rows` |
-| `no_duplicate_rows` | check on `neos_table`: no `(date, neo_id)` pair twice | one SQL query |
-
-### Run it
-
-```sh
-uv run --env-file .env dagster dev          # UI at http://localhost:3000
-```
-
-`pyproject.toml` has a `[tool.dagster]` section, so `dagster dev` finds the module without
-flags. `DAGSTER_HOME` in `.env` points at `.dagster/` so run history survives restarts.
-
-Without the UI:
-
-```sh
+uv run prefect cloud login                                            # once
+uv run prefect deployment run 'neo-flow/daily' --param day=2026-10-02 --watch
+uv run prefect deployment run 'neo-flow/daily' --param day=not-a-date --watch   # forces a failure, tests the Discord ping
 uv run --env-file .env dagster asset materialize --select '*' --partition 2026-09-15 -m dagster_defs.definitions
 ```
 
-### Things to try, in order
-
-1. In the UI, open the asset graph. The three assets and the check are there before anything
-   has run; that is the "declare the outcome" idea.
-2. Materialize one partition. Watch the three steps run in dependency order and the check pass.
-3. **Backfill**: select `neos_table`, choose a date range in September, launch a backfill. One run
-   per partition. Prefect has no equivalent of this.
-4. **Break the check**: materialize a partition you already have. `write_rows` appends on purpose,
-   so the check fails and tells you how many pairs are duplicated. The fix is a real design
-   decision: make `neos_table` delete the partition's rows before inserting, which turns
-   "materialize partition" into "replace partition" and makes re-runs safe.
-
-### What was verified
-
-- One partition (2026-09-15, 7 rows) materialized into MotherDuck; check passed.
-- The same partition materialized twice into a scratch file; second check failed with 7
-  duplicate pairs.
-- `dagster definitions validate` loads the module cleanly.
-
-## Step 5: capstone (not yet done)
-
-`neos_table` materializes by calling `run_deployment("neo-flow/daily")` and waiting, so Dagster
-defines the outcome and Prefect executes it.
+In Prefect Cloud: the run page shows logs and the `neos-daily` table artifact; the Assets page shows
+the `neos table` asset with lineage from the NASA feed; Automations shows the Discord failure ping.
 
 ## Status
 
-- [x] Step 1: core functions, verified against the live feed
-- [x] Step 2a: Prefect flow runs locally
-- [x] Step 2b: repo on GitHub, Actions workflow deploys on push, `neo-flow/daily` registered on the managed pool
-- [x] Step 2c: MotherDuck token synced into a Secret block by the workflow, first managed run wrote rows to `md:neos`
-- [x] Step 2d: failure automation posts to Discord
-- [x] Step 3: MCP servers in `.mcp.json` (MotherDuck one needs `MOTHERDUCK_TOKEN` in `.env`)
-- [x] Step 4: Dagster assets, daily partitions, duplicate check
-- [ ] Step 5: capstone
-
-## Deliberately left out
-
-- **Any theme.** Asteroids are here because the API is free, keyless for the first few runs, and date-addressable.
-- **A local worker.** The Hobby tier does not allow worker-based pools, so there is nothing to keep running on your laptop.
-- **Dagster+.** No free tier, and its MCP server only talks to Dagster+. Local `dagster dev` is enough.
-- **A local LLM.** Claude Code is the one asking the questions.
+All five planned steps are done except the optional capstone, where a Dagster asset materializes
+by triggering the Prefect deployment. See the field guide for what was verified at each step.

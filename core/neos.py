@@ -35,7 +35,10 @@ def fetch_neos(date: str | dt.date, api_key: str | None = None) -> dict:
         params={"start_date": day, "end_date": day, "api_key": key},
         timeout=30.0,
     )
-    response.raise_for_status()
+    if response.is_error:
+        # Re-raise without the URL: httpx's message would include the api_key query parameter,
+        # and that message ends up in Prefect's run logs and state.
+        raise RuntimeError(f"NeoWs feed returned {response.status_code} for {day}: {response.text[:200]}")
     return response.json()
 
 

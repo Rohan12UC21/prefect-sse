@@ -38,7 +38,7 @@ core/neos.py                      three plain functions, no framework imports
 flows/neo_flow.py                 Prefect wrapper: three @tasks, one @flow
 prefect.yaml                      deployment: managed pool, schedule, repo to clone, db_path=md:neos
 .github/workflows/prefect-deploy.yml   runs `prefect deploy --all` on every push to main
-dagster_defs/                     (step 4, not yet written) Dagster assets around the same core functions
+dagster_defs/definitions.py       Dagster wrapper: three partitioned @assets, one @asset_check
 .mcp.json                         MCP servers for Claude Code: prefect, motherduck
 scripts/motherduck-mcp.sh         loads .env, then starts MotherDuck's MCP server on md:neos
 ```
@@ -175,11 +175,53 @@ Restart Claude Code in this directory and approve the two project servers when p
 
 To read the FastMCP side, the Prefect server's source is at github.com/PrefectHQ/prefect-mcp-server.
 
-## Step 4: Dagster (not yet done)
+## Step 4: Dagster
 
-The same three steps as assets `raw_neos -> neos -> neos_table` with daily partitions, plus a
-`no_duplicate_rows` asset check. Backfill a month, then materialize one day twice to watch the
-check fail.
+`dagster_defs/definitions.py` declares the same three steps as assets with daily partitions,
+plus one asset check, all calling the core functions. Where it writes comes from `NEOS_DB_PATH`
+in `.env` (`md:neos` to share the table with the Prefect deployment, or a local file to
+experiment).
+
+| Asset / check | What it is | Core call |
+|---|---|---|
+| `raw_neos` | the feed payload for one day (partition) | `fetch_neos` |
+| `neos` | one row per asteroid, depends on `raw_neos` | `to_rows` |
+| `neos_table` | the day's rows appended to the table, depends on `neos` | `write_rows` |
+| `no_duplicate_rows` | check on `neos_table`: no `(date, neo_id)` pair twice | one SQL query |
+
+### Run it
+
+```sh
+uv run --env-file .env dagster dev          # UI at http://localhost:3000
+```
+
+`pyproject.toml` has a `[tool.dagster]` section, so `dagster dev` finds the module without
+flags. `DAGSTER_HOME` in `.env` points at `.dagster/` so run history survives restarts.
+
+Without the UI:
+
+```sh
+uv run --env-file .env dagster asset materialize --select '*' --partition 2026-09-15 -m dagster_defs.definitions
+```
+
+### Things to try, in order
+
+1. In the UI, open the asset graph. The three assets and the check are there before anything
+   has run; that is the "declare the outcome" idea.
+2. Materialize one partition. Watch the three steps run in dependency order and the check pass.
+3. **Backfill**: select `neos_table`, choose a date range in September, launch a backfill. One run
+   per partition. Prefect has no equivalent of this.
+4. **Break the check**: materialize a partition you already have. `write_rows` appends on purpose,
+   so the check fails and tells you how many pairs are duplicated. The fix is a real design
+   decision: make `neos_table` delete the partition's rows before inserting, which turns
+   "materialize partition" into "replace partition" and makes re-runs safe.
+
+### What was verified
+
+- One partition (2026-09-15, 7 rows) materialized into MotherDuck; check passed.
+- The same partition materialized twice into a scratch file; second check failed with 7
+  duplicate pairs.
+- `dagster definitions validate` loads the module cleanly.
 
 ## Step 5: capstone (not yet done)
 
@@ -194,7 +236,7 @@ defines the outcome and Prefect executes it.
 - [x] Step 2c: MotherDuck token synced into a Secret block by the workflow, first managed run wrote rows to `md:neos`
 - [x] Step 2d: failure automation posts to Discord
 - [x] Step 3: MCP servers in `.mcp.json` (MotherDuck one needs `MOTHERDUCK_TOKEN` in `.env`)
-- [ ] Step 4: Dagster assets and check
+- [x] Step 4: Dagster assets, daily partitions, duplicate check
 - [ ] Step 5: capstone
 
 ## Deliberately left out

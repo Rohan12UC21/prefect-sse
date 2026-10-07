@@ -7,7 +7,12 @@ dependencies = [
     "httpx>=0.27",
     "duckdb>=1.1",
     "prefect>=3.8.8",
+    "dagster>=1.13.25",
+    "dagster-webserver>=1.13.25",
 ]
 
 [tool.uv]
 package = false
+
+[tool.dagster]
+module_name = "dagster_defs.definitions"

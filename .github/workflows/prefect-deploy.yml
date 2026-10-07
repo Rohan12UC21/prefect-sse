@@ -1,0 +1,40 @@
+# Registers the deployments in prefect.yaml with Prefect Cloud on every push to main.
+#
+# This does not run the flow. It tells Prefect Cloud "the deployment now points at this commit's
+# prefect.yaml". The flow itself still runs on your laptop's worker, which clones the repo.
+#
+# Secrets: PREFECT_API_KEY (a Prefect Cloud API key), PREFECT_API_URL (the workspace URL that
+# `prefect config view` prints after `prefect cloud login`).
+
+name: prefect-deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - prefect.yaml
+      - flows/**
+      - core/**
+      - pyproject.toml
+      - uv.lock
+      - .github/workflows/prefect-deploy.yml
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install
+        run: uv sync --frozen
+
+      - name: Register deployments
+        env:
+          PREFECT_API_KEY: ${{ secrets.PREFECT_API_KEY }}
+          PREFECT_API_URL: ${{ secrets.PREFECT_API_URL }}
+        run: uv run prefect deploy --all

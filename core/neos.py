@@ -3,7 +3,8 @@
 No orchestration imports here on purpose. The Prefect flow and the Dagster assets are thin
 wrappers around these, so anything that differs between them is the framework's opinion.
 
-Run directly:  python -m core.neos 2026-10-05
+Run directly:  python -m core.neos 2026-10-05 [db_path]
+  db_path defaults to NEOS_DB_PATH or ./neos.duckdb; use md:neos for MotherDuck.
 """
 
 from __future__ import annotations
@@ -76,9 +77,10 @@ COLUMNS = ["date", "neo_id", "name", "diameter_m", "miss_km", "velocity_kph", "h
 
 
 def write_rows(rows: list[Row], db_path: str = DEFAULT_DB_PATH) -> int:
-    """Append rows to the `neos` table, creating the file and table on first use. Returns rows written.
+    """Append rows to the `neos` table, creating the database and table on first use. Returns rows written.
 
-    Deliberately a plain INSERT: running the same day twice produces duplicates. That is what
+    `db_path` is a local file path, or `md:<database>` for MotherDuck (reads MOTHERDUCK_TOKEN
+    from the environment). Deliberately a plain INSERT: running the same day twice produces duplicates. That is what
     the Dagster asset check is there to catch, and what partitions and result caching prevent.
     """
     with duckdb.connect(db_path) as con:
@@ -93,13 +95,13 @@ def write_rows(rows: list[Row], db_path: str = DEFAULT_DB_PATH) -> int:
 
 def main(argv: list[str]) -> None:
     day = argv[1] if len(argv) > 1 else dt.date.today().isoformat()
-    db_path = argv[2] if len(argv) > 2 else DEFAULT_DB_PATH
+    db_path = argv[2] if len(argv) > 2 else os.environ.get("NEOS_DB_PATH", DEFAULT_DB_PATH)
 
     rows = to_rows(fetch_neos(day))
     written = write_rows(rows, db_path)
     print(f"{day}: wrote {written} rows to {db_path}")
 
-    with duckdb.connect(db_path, read_only=True) as con:
+    with duckdb.connect(db_path, read_only=not db_path.startswith("md:")) as con:
         closest = con.execute(
             "SELECT name, round(miss_km) AS miss_km, hazardous FROM neos WHERE date = ? ORDER BY miss_km LIMIT 3",
             [day],

@@ -1,7 +1,10 @@
 # Prefect deployment config. `prefect deploy --all` registers everything below in Prefect Cloud.
+# The GitHub Actions workflow runs that on every push to main.
 #
-# The worker never uses this directory. At each run it clones the repo at `pull`, cd's into the
-# clone, and imports the entrypoint from there. That is why db_path below is absolute.
+# Prefect Cloud's Hobby tier runs flows only on its managed serverless pool. Each run starts a
+# fresh container, clones this repo (the `pull` step), installs `pip_packages`, and imports the
+# entrypoint. Nothing persists between runs, so the flow writes to MotherDuck (db_path: md:neos),
+# authenticated by the `motherduck-token` Secret block.
 
 name: prefect-sse
 prefect-version: 3.8.8
@@ -13,14 +16,18 @@ pull:
 
 deployments:
   - name: daily
-    description: Fetch today's near-Earth asteroid close approaches and append them to neos.duckdb.
+    description: Fetch today's near-Earth asteroid close approaches and append them to the neos table in MotherDuck.
     entrypoint: flows/neo_flow.py:neo_flow
     work_pool:
-      name: local
+      name: managed
+      job_variables:
+        pip_packages:
+          - httpx>=0.27
+          - duckdb>=1.1
     schedules:
       - cron: "0 6 * * *"
         timezone: America/New_York
         active: true
     parameters:
-      db_path: /Users/rohankapoor/prefect-sse/neos.duckdb
+      db_path: md:neos
     tags: [asteroids]

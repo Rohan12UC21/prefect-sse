@@ -40,7 +40,7 @@ prefect.yaml                      deployment: managed pool, schedule, repo to cl
 .github/workflows/prefect-deploy.yml   runs `prefect deploy --all` on every push to main
 dagster_defs/                     (step 4, not yet written) Dagster assets around the same core functions
 .mcp.json                         MCP servers for Claude Code: prefect, motherduck
-scripts/motherduck-mcp.sh         loads .env, then starts MotherDuck's MCP server read-only on md:neos
+scripts/motherduck-mcp.sh         loads .env, then starts MotherDuck's MCP server on md:neos
 ```
 
 The table, wherever it lives: `neos(date, neo_id, name, diameter_m, miss_km, velocity_kph, hazardous)`.
@@ -154,8 +154,9 @@ uv run prefect deployment run 'neo-flow/daily' --param day=not-a-date --watch
   FastMCP. Reads your active Prefect profile, so `prefect cloud login` is all it needs. Fifteen
   read-only tools: deployments, flow runs, logs, work pools, automations, events, docs search.
 - `motherduck`: MotherDuck's official server, started through `scripts/motherduck-mcp.sh`, which
-  loads `.env` first because Claude Code does not. Needs `MOTHERDUCK_TOKEN` in `.env`. Opened
-  read-only on `md:neos`.
+  loads `.env` first because Claude Code does not. Needs `MOTHERDUCK_TOKEN` in `.env`. Its
+  `execute_query` tool runs SQL on `md:neos` (read/write: MotherDuck's read-only mode needs a
+  separate read-scaling token).
 
 Restart Claude Code in this directory and approve the two project servers when prompted. Then:
 

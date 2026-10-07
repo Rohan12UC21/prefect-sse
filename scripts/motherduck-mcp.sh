@@ -13,4 +13,5 @@ if [ -z "$motherduck_token" ]; then
   echo "motherduck-mcp: set MOTHERDUCK_TOKEN in .env" >&2
   exit 1
 fi
-exec uvx mcp-server-motherduck --db-path md:neos --read-only
+# --read-only would need a MotherDuck read-scaling token; a normal token must connect read/write.
+exec uvx mcp-server-motherduck --db-path md:neos

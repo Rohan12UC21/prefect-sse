@@ -4,7 +4,8 @@
 # prefect.yaml". The flow itself still runs on your laptop's worker, which clones the repo.
 #
 # Secrets: PREFECT_API_KEY (a Prefect Cloud API key), PREFECT_API_URL (the workspace URL that
-# `prefect config view` prints after `prefect cloud login`).
+# `prefect config view` prints after `prefect cloud login`), MOTHERDUCK_API_KEY (a MotherDuck
+# access token, copied into the `motherduck-token` Secret block on every deploy).
 
 name: prefect-deploy
 
@@ -32,6 +33,20 @@ jobs:
 
       - name: Install
         run: uv sync --frozen
+
+      - name: Sync secret blocks
+        # The managed run reads these at run time. GitHub's secrets are the source of truth.
+        env:
+          PREFECT_API_KEY: ${{ secrets.PREFECT_API_KEY }}
+          PREFECT_API_URL: ${{ secrets.PREFECT_API_URL }}
+          MOTHERDUCK_API_KEY: ${{ secrets.MOTHERDUCK_API_KEY }}
+        run: |
+          uv run python -c "
+          import os
+          from prefect.blocks.system import Secret
+          Secret(value=os.environ['MOTHERDUCK_API_KEY']).save('motherduck-token', overwrite=True)
+          print('saved block motherduck-token')
+          "
 
       - name: Register deployments
         env:
